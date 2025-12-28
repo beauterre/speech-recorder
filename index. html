@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MP3 Recorder</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+body {
+  margin: 0;
+  padding: 1rem;
+  font-family: system-ui, sans-serif;
+  background: #000;
+  color: #fff;
+}
+button {
+  font-size: 1.1rem;
+  padding: 0.6rem 1rem;
+  margin-right: 0.5rem;
+}
+a {
+  color: #6cf;
+}
+</style>
+</head>
+
+<body>
+<h1>MP3 Recorder</h1>
+
+<button id="start">Start</button>
+<button id="stop" disabled>Stop</button>
+<div id="status"></div>
+<div id="download"></div>
+
+<!-- LAME MP3 encoder -->
+<script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.0/lame.min.js"></script>
+
+<script>
+let audioContext;
+let processor;
+let source;
+let stream;
+let pcmData = [];
+let wakeLock = null;
+
+const startBtn = document.getElementById('start');
+const stopBtn  = document.getElementById('stop');
+const statusEl = document.getElementById('status');
+const dlEl     = document.getElementById('download');
+
+async function requestWakeLock() {
+  if ('wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+    } catch (e) {
+      console.warn('Wake lock failed:', e);
+    }
+  }
+}
+
+async function startRecording() {
+  await requestWakeLock();
+
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new AudioContext();
+  source = audioContext.createMediaStreamSource(stream);
+
+  processor = audioContext.createScriptProcessor(4096, 1, 1);
+  processor.onaudioprocess = e => {
+    pcmData.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+
+  pcmData = [];
+  statusEl.textContent = 'Recording…';
+
+  startBtn.disabled = true;
+  stopBtn.disabled = false;
+}
+
+function stopRecording() {
+  processor.disconnect();
+  source.disconnect();
+  stream.getTracks().forEach(t => t.stop());
+  audioContext.close();
+
+  if (wakeLock) {
+    wakeLock.release();
+    wakeLock = null;
+  }
+
+  encodeMP3();
+  statusEl.textContent = 'Stopped';
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+}
+
+function encodeMP3() {
+  const sampleRate = 44100;
+  const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 128);
+  const mp3Data = [];
+
+  pcmData.forEach(buffer => {
+    const samples = new Int16Array(buffer.length);
+    for (let i = 0; i < buffer.length; i++) {
+      samples[i] = Math.max(-1, Math.min(1, buffer[i])) * 32767;
+    }
+    const mp3buf = mp3encoder.encodeBuffer(samples);
+    if (mp3buf.length > 0) mp3Data.push(mp3buf);
+  });
+
+  const end = mp3encoder.flush();
+  if (end.length > 0) mp3Data.push(end);
+
+  const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
+  const url = URL.createObjectURL(blob);
+
+  dlEl.innerHTML = '';
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'recording.mp3';
+  a.textContent = 'Download MP3';
+  dlEl.appendChild(a);
+}
+
+startBtn.onclick = startRecording;
+stopBtn.onclick = stopRecording;
+</script>
+</body>
+</html>
